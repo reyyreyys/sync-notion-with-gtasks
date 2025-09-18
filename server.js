@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const cron = require('node-cron');
 require('dotenv').config();
 
 const config = require('./src/config');
@@ -52,16 +51,21 @@ app.get('/sync/status', (req, res) => {
   res.status(200).json(status);
 });
 
-// Schedule automatic sync every 2 minutes (for testing)
-cron.schedule('*/2 * * * *', async () => {
+// Schedule automatic sync every 2 minutes using setInterval
+setInterval(async () => {
   try {
+    console.log('🔄 INTERVAL TRIGGERED at:', new Date().toISOString());
     logger.info('🔄 Starting scheduled sync');
     await syncService.performFullSync();
     logger.info('✅ Scheduled sync completed');
   } catch (error) {
+    console.error('❌ INTERVAL ERROR:', error);
     logger.error('❌ Scheduled sync failed:', error);
   }
-});
+}, 2 * 60 * 1000); // 2 minutes in milliseconds
+
+console.log('📅 INTERVAL SET - should run every 2 minutes');
+console.log('📅 Current time:', new Date().toISOString());
 
 // Error handling middleware
 app.use((err, req, res, next) => {
