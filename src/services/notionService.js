@@ -45,23 +45,76 @@ async getTasks() {
       }
     });
 
-    // For each page, get the full page content to read the comments/sub-items
-    const tasksWithContent = await Promise.all(
-      response.results.map(async (page) => {
-        const task = this.formatNotionTask(page);
-        // Get the page content to read the comments section
-        const comments = await this.getPageComments(page.id);
-        task.comments = comments;
-        task.notes = comments; // Make both fields available
-        return task;
-      })
-    );
+    console.log(`📋 Processing ${response.results.length} tasks with rate limiting...`);
 
+    // RATE LIMITED: Process tasks in batches of 5 with delays
+    const tasksWithContent = [];
+    const batchSize = 5;
+    
+    for (let i = 0; i < response.results.length; i += batchSize) {
+      const batch = response.results.slice(i, i + batchSize);
+      
+      console.log(`📋 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(response.results.length/batchSize)}`);
+      
+      const batchTasks = await Promise.all(
+        batch.map(async (page) => {
+          const task = this.formatNotionTask(page);
+          try {
+            // Get comments with retry logic
+            const comments = await this.getPageCommentsWithRetry(page.id);
+            task.comments = comments;
+            task.notes = comments;
+            return task;
+          } catch (error) {
+            console.error(`❌ Failed to get comments for "${task.title}":`, error.message);
+            // Return task without comments instead of failing completely
+            task.comments = '';
+            task.notes = '';
+            return task;
+          }
+        })
+      );
+      
+      tasksWithContent.push(...batchTasks);
+      
+      // Add delay between batches to avoid rate limits
+      if (i + batchSize < response.results.length) {
+        await this.delay(1000); // 1 second delay
+      }
+    }
+
+    console.log(`✅ Successfully processed ${tasksWithContent.length} tasks`);
     return tasksWithContent;
   } catch (error) {
     console.error('Error fetching Notion tasks:', error);
     throw error;
   }
+}
+
+// Add retry logic for getting page comments
+async getPageCommentsWithRetry(pageId, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await this.getPageComments(pageId);
+    } catch (error) {
+      console.error(`❌ Attempt ${attempt}/${maxRetries} failed for page comments:`, error.message);
+      
+      if (attempt === maxRetries) {
+        console.error(`❌ All ${maxRetries} attempts failed, returning empty comments`);
+        return ''; // Return empty instead of failing
+      }
+      
+      // Exponential backoff: wait longer between retries
+      const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+      console.log(`⏳ Waiting ${delay}ms before retry...`);
+      await this.delay(delay);
+    }
+  }
+}
+
+// Helper method for delays
+delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 
