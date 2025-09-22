@@ -423,10 +423,15 @@ class NotionService {
 
     formatNotionTask(page) {
         const properties = page.properties;
+        const statusName = properties.Status?.status?.name;
+        
+        // Debug log to see actual status values
+        console.log(`🔍 DEBUG: Notion status for "${properties.Name?.title?.[0]?.text?.content}": "${statusName}"`);
+        
         return {
             id: page.id,
             title: properties.Name?.title?.[0]?.text?.content || '',
-            completed: properties.Status?.status?.name === 'Done',
+            completed: statusName === 'Done', // Make sure this matches your actual Notion status options
             due: properties['Due Date']?.date?.start || null,
             notes: '', // This will be populated with comments later
             comments: '', // Add this field

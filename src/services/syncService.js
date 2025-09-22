@@ -49,7 +49,8 @@ class SyncService {
             });
 
             let created = 0, updated = 0;
-            const SYNC_BUFFER = 5000; // 5 second buffer to avoid sync conflicts
+            const COMPLETION_BUFFER = 1000; // Reduced to 1 second for completion status
+            const NOTES_BUFFER = 5000; // Keep 5 seconds for notes to avoid conflicts
 
             // Process each Google task for sync comparison
             for (const googleTask of googleTasks) {
@@ -82,7 +83,7 @@ class SyncService {
                 });
 
                 if (matchingNotionTask) {
-                    // Compare timestamps for completion status only
+                    // Compare timestamps for completion status with reduced buffer
                     const googleTime = new Date(googleTask.lastModified);
                     const notionTime = new Date(matchingNotionTask.lastModified);
                     const timeDifferenceMs = googleTime.getTime() - notionTime.getTime();
@@ -90,40 +91,39 @@ class SyncService {
                     console.log(`✅ Found matching Notion task: "${matchingNotionTask.title}"`);
                     console.log(`📅 Google timestamp: ${googleTime.toISOString()} (completed: ${googleTask.completed})`);
                     console.log(`📅 Notion timestamp: ${notionTime.toISOString()} (completed: ${matchingNotionTask.completed})`);
-                    console.log(`⏱️ Time difference: ${timeDifferenceMs}ms (buffer: ${SYNC_BUFFER}ms)`);
+                    console.log(`⏱️ Time difference: ${timeDifferenceMs}ms (completion buffer: ${COMPLETION_BUFFER}ms)`);
 
                     let needsUpdate = false;
 
-                    if (timeDifferenceMs > SYNC_BUFFER) {
-                        // Google is newer - update Notion completion status only
-                        console.log('🟦 Google Tasks is newer - checking for completion updates');
-                        if (matchingNotionTask.completed !== googleTask.completed) {
-                            console.log(`   🔄 Will update Notion completion: ${matchingNotionTask.completed} → ${googleTask.completed}`);
+                    // COMPLETION STATUS SYNC - Use small buffer for immediate response
+                    if (matchingNotionTask.completed !== googleTask.completed) {
+                        console.log(`🔄 COMPLETION STATUS MISMATCH DETECTED!`);
+                        console.log(`   Google: ${googleTask.completed} | Notion: ${matchingNotionTask.completed}`);
+                        
+                        if (timeDifferenceMs > COMPLETION_BUFFER) {
+                            // Google is newer - update Notion
+                            console.log('🟦 Google Tasks is newer - updating Notion completion');
+                            console.log(`   🔄 Will update Notion: ${matchingNotionTask.completed} → ${googleTask.completed}`);
                             await this.updateNotionCompletion(matchingNotionTask, googleTask.completed);
                             needsUpdate = true;
-                        } else {
-                            console.log(`   ✅ Completion status already matches`);
-                        }
-                    } else if (timeDifferenceMs < -SYNC_BUFFER) {
-                        // Notion is newer - update Google completion status only  
-                        console.log('🟪 Notion is newer - checking for completion updates');
-                        if (googleTask.completed !== matchingNotionTask.completed) {
-                            console.log(`   🔄 Will update Google completion: ${googleTask.completed} → ${matchingNotionTask.completed}`);
+                        } else if (timeDifferenceMs < -COMPLETION_BUFFER) {
+                            // Notion is newer - update Google  
+                            console.log('🟪 Notion is newer - updating Google completion');
+                            console.log(`   🔄 Will update Google: ${googleTask.completed} → ${matchingNotionTask.completed}`);
                             await this.updateGoogleCompletion(googleTask, matchingNotionTask.completed);
                             needsUpdate = true;
                         } else {
-                            console.log(`   ✅ Completion status already matches`);
+                            // Within buffer - check which one was likely changed more recently
+                            console.log('⚖️ Within completion buffer - using Google Tasks priority');
+                            console.log(`   🔄 Updating Notion (Google priority): ${matchingNotionTask.completed} → ${googleTask.completed}`);
+                            await this.updateNotionCompletion(matchingNotionTask, googleTask.completed);
+                            needsUpdate = true;
                         }
                     } else {
-                        console.log('⚖️ Timestamps within buffer - checking completion status anyway');
-                        if (matchingNotionTask.completed !== googleTask.completed) {
-                            console.log(`   ⚠️ Completion mismatch within buffer: Notion(${matchingNotionTask.completed}) vs Google(${googleTask.completed})`);
-                        } else {
-                            console.log('✅ Completion status is in sync (within buffer)');
-                        }
+                        console.log('✅ Completion status is already in sync');
                     }
 
-                    // Handle notes sync from Notion → Google with smart truncation
+                    // NOTES SYNC - Use larger buffer to avoid conflicts from our own updates
                     const notionNotes = matchingNotionTask.notes?.trim() || '';
                     const googleNotes = googleTask.notes?.trim() || '';
                     
@@ -132,17 +132,20 @@ class SyncService {
                     console.log(`   Notion notes: "${notionNotes.substring(0, 100)}..." (${notionNotes.length} chars)`);
                     
                     if (notionNotes !== googleNotes) {
-                        const MAX_SYNC_LENGTH = 8000;
-                        
-                        if (notionNotes.length > MAX_SYNC_LENGTH) {
-                            console.log(`⚠️ Notion content too large (${notionNotes.length} chars > ${MAX_SYNC_LENGTH})`);
-                            console.log(`📝 Will sync truncated version to Google Tasks`);
+                        // Only sync notes if enough time has passed to avoid update conflicts
+                        if (Math.abs(timeDifferenceMs) > NOTES_BUFFER) {
+                            const MAX_SYNC_LENGTH = 8000;
+                            
+                            if (notionNotes.length > MAX_SYNC_LENGTH) {
+                                console.log(`⚠️ Notion content too large (${notionNotes.length} chars > ${MAX_SYNC_LENGTH})`);
+                                console.log(`📝 Will sync truncated version to Google Tasks`);
+                            } else {
+                                console.log('📝 Notes differ - syncing Notion → Google (Notion always wins)');
+                            }
                             await this.updateGoogleNotes(googleTask, notionNotes);
                             needsUpdate = true;
                         } else {
-                            console.log('📝 Notes differ - syncing Notion → Google (Notion always wins)');
-                            await this.updateGoogleNotes(googleTask, notionNotes);
-                            needsUpdate = true;
+                            console.log(`⏳ Skipping notes sync - within buffer to prevent conflicts (${Math.abs(timeDifferenceMs)}ms < ${NOTES_BUFFER}ms)`);
                         }
                     } else {
                         console.log('✅ Notes are already in sync');
@@ -331,10 +334,10 @@ class SyncService {
             stats: this.stats,
             syncType: 'Hybrid Sync Strategy',
             rules: {
-                completion: 'Latest timestamp wins for completion status',
+                completion: 'Latest timestamp wins for completion status (1-second buffer)',
                 notes: 'Notion always wins for notes/comments (Notion → Google only)',
                 direction: 'Completion: Bidirectional | Notes: Notion → Google only',
-                buffer: '5-second buffer to prevent sync conflicts',
+                buffer: 'Completion: 1-second buffer | Notes: 5-second buffer',
                 priority: 'Completion status: timestamp-based | Notes: Notion master',
                 contentHandling: 'Smart truncation for large content (8000 char limit)'
             }
