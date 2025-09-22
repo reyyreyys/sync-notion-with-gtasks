@@ -5,5 +5,11 @@
     "azureFunctions.projectRuntime": "~4",
     "debug.internalConsoleOptions": "neverOpen",
     "azureFunctions.projectLanguageModel": 4,
-    "azureFunctions.preDeployTask": "npm prune (functions)"
+    "azureFunctions.preDeployTask": "npm prune (functions)",
+    "appService.zipIgnorePattern": [
+        "node_modules{,/**}",
+        ".vscode{,/**}"
+    ],
+    "appService.defaultWebAppToDeploy": "/subscriptions/9759d77a-8c82-4b2e-891c-8463b3ba95d6/resourceGroups/notion-gtasks-sync/providers/Microsoft.Web/sites/notion-gtasks-sync",
+    "appService.deploySubpath": "."
 }
