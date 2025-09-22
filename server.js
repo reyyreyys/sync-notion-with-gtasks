@@ -62,7 +62,7 @@ setInterval(async () => {
     console.error('❌ INTERVAL ERROR:', error);
     logger.error('❌ Scheduled sync failed:', error);
   }
-}, 2 * 60 * 1000); // 2 minutes in milliseconds
+}, 5 * 60 * 1000); // 5 minutes in milliseconds
 
 console.log('📅 INTERVAL SET - should run every 2 minutes');
 console.log('📅 Current time:', new Date().toISOString());
