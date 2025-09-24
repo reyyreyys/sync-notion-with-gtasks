@@ -50,6 +50,13 @@ class SyncService {
         return g > n + this.recencySkewMs;
     }
 
+    // Return true if notion is considered "newer" than google by threshold
+    notionBeatsGoogle(notionTask, googleTask) {
+        const g = googleTask?.lastModified ? Date.parse(googleTask.lastModified) : 0;
+        const n = notionTask?.lastModified ? Date.parse(notionTask.lastModified) : 0;
+        return n > g + this.recencySkewMs;
+    }
+
     async performFullSync() {
         if (this.isRunning) {
             if (this.debugCompletion) logger.warn('Sync already in progress, skipping');
@@ -62,7 +69,7 @@ class SyncService {
         console.log(`SYNC START ${syncStartTime.toISOString()}`);
 
         try {
-            if (this.debugCompletion) logger.info('Sync start: Google completion → Notion (title-only, latest-wins), bi-directional creates with guards', {
+            if (this.debugCompletion) logger.info('Sync start: Google completion → Notion (title-only, latest-wins), Notion↔Google notes, bi-directional completion and creates with guards', {
                 normalizeTitles: this.normalizeTitles,
                 recencySkewMs: this.recencySkewMs
             });
@@ -105,7 +112,7 @@ class SyncService {
                 // Only update Notion if Google is newer by threshold
                 if (nt.completed !== representative.completed && this.googleBeatsNotion(representative, nt)) {
                     if (this.debugCompletion) {
-                        logger.info('Completion change (latest-wins)', {
+                        logger.info('Completion change (Google → Notion, latest-wins)', {
                             title: nt.title,
                             googleCompleted: representative.completed,
                             googleUpdated: representative.lastModified,
@@ -119,13 +126,71 @@ class SyncService {
                 }
             }
 
+            // Notion → Google completion sync (title-only match, open-first, latest-wins)
+            for (const nt of notionTasks) {
+                if (!nt.title?.trim()) continue;
+                const key = this.normalizeTitle(nt.title);
+                const group = titleIndex.get(key);
+                if (!group) continue;
+
+                // Prefer any open Google task, else fall back to a completed one
+                const representative = group.open[0] || group.done[0];
+                if (!representative) continue;
+
+                // Only update Google if Notion is newer by threshold
+                if (nt.completed !== representative.completed && this.notionBeatsGoogle(nt, representative)) {
+                    if (this.debugCompletion) {
+                        logger.info('Completion change (Notion → Google, latest-wins)', {
+                            title: nt.title,
+                            notionCompleted: nt.completed,
+                            notionEdited: nt.lastModified,
+                            googleUpdated: representative.lastModified,
+                            googleOpenCount: group.open.length,
+                            googleDoneCount: group.done.length
+                        });
+                    }
+                    await this.updateGoogleCompletion(representative, nt.completed);
+                    updated++;
+                }
+            }
+
+            // Notion → Google notes sync (title-only, latest-wins)
+            for (const nt of notionTasks) {
+                if (!nt.title?.trim()) continue;
+                const key = this.normalizeTitle(nt.title);
+                const group = titleIndex.get(key);
+                if (!group) continue;
+
+                // Prefer the open Google task; if none open, pick the most recently updated among done
+                const candidate = group.open[0] || group.done.sort((a, b) => Date.parse(b.lastModified || 0) - Date.parse(a.lastModified || 0))[0];
+                if (!candidate) continue;
+
+                const notionNotes = (nt.notes || '').trim();
+                const googleNotes = (candidate.notes || '').trim();
+
+                // Only push notes when Notion is more recent and content differs
+                if (this.notionBeatsGoogle(nt, candidate) && notionNotes !== googleNotes) {
+                    if (this.debugCompletion) {
+                        logger.info('Notes change (Notion → Google, latest-wins)', {
+                            title: nt.title,
+                            notionEdited: nt.lastModified,
+                            googleUpdated: candidate.lastModified,
+                            notionLen: notionNotes.length,
+                            googleLen: googleNotes.length
+                        });
+                    }
+                    await this.updateGoogleNotes(candidate, notionNotes);
+                    updated++;
+                }
+            }
+
             // Notion-only → Google (title-only guards)
             const notionOnlyTasks = notionTasks.filter(nt => {
                 if (!nt.title?.trim()) return false;
 
-                // If completed in Notion, do not create on Google
+                // If completed in Notion, do not create on Google (creation path)
                 if (nt.completed) {
-                    if (this.debugCompletion) logger.debug('Guard: completed in Notion → skip', { title: nt.title });
+                    if (this.debugCompletion) logger.debug('Guard: completed in Notion → skip create', { title: nt.title });
                     return false;
                 }
 
@@ -135,7 +200,7 @@ class SyncService {
                     return this.compareTitles(nt.title, gt.title);
                 });
                 if (hasTitleMatch) {
-                    if (this.debugCompletion) logger.debug('Guard: title exists in Google → skip', { title: nt.title });
+                    if (this.debugCompletion) logger.debug('Guard: title exists in Google → skip create', { title: nt.title });
                     return false;
                 }
 
@@ -150,7 +215,7 @@ class SyncService {
                     return this.compareTitles(notionTask.title, gt.title);
                 });
                 if (anyTitleMatchFresh) {
-                    if (this.debugCompletion) logger.debug('Backstop: title match in fresh snapshot → skip', { title: notionTask.title });
+                    if (this.debugCompletion) logger.debug('Backstop: title match in fresh snapshot → skip create', { title: notionTask.title });
                     continue;
                 }
 
@@ -162,7 +227,7 @@ class SyncService {
                     return this.compareTitles(notionTask.title, gt.title);
                 });
                 if (anyTitleMatchVerify) {
-                    if (this.debugCompletion) logger.debug('Verify backstop: title match after debounce → skip', { title: notionTask.title });
+                    if (this.debugCompletion) logger.debug('Verify backstop: title match after debounce → skip create', { title: notionTask.title });
                     continue;
                 }
 
@@ -265,8 +330,8 @@ class SyncService {
     async updateGoogleNotes(googleTask, notes) {
         // quiet in focused mode
         const MAX = 8000;
-        let processed = notes;
-        if (notes.length > MAX) processed = this.createSmartTruncation(notes, MAX);
+        let processed = notes || '';
+        if (processed.length > MAX) processed = this.createSmartTruncation(processed, MAX);
         if (processed.length === 0) return;
         await googleTasksService.updateTask(googleTask.id, { notes: processed });
     }
@@ -288,9 +353,10 @@ class SyncService {
             isRunning: this.isRunning,
             lastSync: this.lastSync,
             stats: this.stats,
-            syncType: 'Google completion-focused sync (title-only, latest-wins, bi-directional creates)',
+            syncType: 'Google completion-focused sync (title-only, latest-wins, notes sync, bi-directional completion and creates)',
             rules: {
-                completion: 'Google → Notion by title with recency check (open-first)',
+                completion: 'Both directions by title with recency check (open-first)',
+                notes: 'Notion → Google by title with recency check',
                 guards: 'Skip create if completed in Notion or title exists in Google/Notion',
                 normalization: this.normalizeTitles ? 'normalized' : 'exact',
                 recencySkewMs: this.recencySkewMs
