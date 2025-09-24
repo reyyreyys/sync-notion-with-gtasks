@@ -16,54 +16,86 @@ class GoogleTasksService {
 
     this.tasks = google.tasks({ version: 'v1', auth: this.oauth2Client });
     this.taskListId = config.google.taskListId;
+
+    // Recent window setting (days); can be overridden by ENV (e.g., 7)
+    this.recentDays = Number(process.env.RECENT_DAYS || 7);
   }
 
+  // Full, paginated fetch of all tasks (completed + hidden), sorted by updated desc.
   async getTasks() {
     try {
-      const response = await this.tasks.tasks.list({
-        tasklist: this.taskListId,
-        showCompleted: true,
-        showDeleted: false,
-        maxResults: 100
-      });
+      let pageToken = undefined;
+      const allItems = [];
+      let page = 0;
 
-      console.log('🔍 DEBUG - Raw Google API response:', JSON.stringify(response.data, null, 2));
+      do {
+        const response = await this.tasks.tasks.list({
+          tasklist: this.taskListId,
+          showCompleted: true,
+          showDeleted: false,
+          showHidden: true, // include hidden completed tasks
+          maxResults: 100,
+          pageToken
+        });
 
-      return response.data.items?.map(task => this.formatGoogleTask(task)) || [];
+        const items = response.data.items || [];
+        allItems.push(...items);
+
+        pageToken = response.data.nextPageToken || undefined;
+        page += 1;
+        logger.debug('Google tasks page', {
+          page,
+          pageItems: items.length,
+          accumulated: allItems.length,
+          hasNext: !!pageToken
+        });
+      } while (pageToken);
+
+      // Sort by updated desc for predictability
+      allItems.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+
+      const formatted = allItems.map(task => this.formatGoogleTask(task));
+      logger.debug('Google tasks fetched (all pages)', { count: formatted.length });
+      return formatted;
     } catch (error) {
-      logger.error('Error fetching Google Tasks:', error);
+      logger.error('Error fetching Google Tasks', { message: error.message });
       throw error;
     }
   }
 
+  // Faster fetch: last N days by updated OR any active (needsAction) tasks.
+  async getTasksRecent(days = this.recentDays) {
+    const all = await this.getTasks();
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const recentOrActive = all.filter(t => {
+      const updatedMs = t.lastModified ? Date.parse(t.lastModified) : 0;
+      const isRecent = updatedMs >= cutoff;
+      const isActive = !t.completed;
+      return isRecent || isActive;
+    });
+    logger.debug('Google tasks filtered (recent window + active)', {
+      days,
+      total: all.length,
+      returned: recentOrActive.length
+    });
+    return recentOrActive;
+  }
+
   formatGoogleTask(task) {
-    console.log(`🔍 DEBUG formatGoogleTask - Raw Google API response:`, task);
-    
-    // Google Tasks API returns 'completed' or 'needsAction' in the status field
+    // status: 'completed' | 'needsAction'
     const completed = task.status === 'completed';
-    
-    console.log(`🔍 DEBUG - Status field: "${task.status}"`);
-    console.log(`🔍 DEBUG - Calculated completed: ${completed}`);
-    
-    // Extract Notion ID marker from notes (optional)
-    const notionIdMatch = task.notes?.match(/\[Notion ID: ([^\]]+)\]/);
-    const notionPageId = notionIdMatch ? notionIdMatch[1] : null;
-    
-    // Clean notes by removing the Notion ID tag
-    const cleanNotes = task.notes ? task.notes.replace(/\[Notion ID: [^\]]+\]/, '').trim() : '';
-    
+
     const formatted = {
       id: task.id,
       title: task.title || '',
-      completed: completed, // Use the status-based calculation
+      completed,
       due: task.due ? new Date(task.due).toISOString().split('T')[0] : null,
-      notes: cleanNotes,
-      notionPageId,
+      notes: task.notes || '',
       lastModified: task.updated,
       created: task.updated
     };
-    
-    console.log(`🔍 DEBUG formatGoogleTask - Final formatted:`, formatted);
+
+    logger.debug('Google task formatted', { id: formatted.id, title: formatted.title, completed: formatted.completed });
     return formatted;
   }
 
@@ -79,28 +111,24 @@ class GoogleTasksService {
         task.due = new Date(taskData.due).toISOString();
       }
 
-      // Add Notion page ID in notes for mapping
-      if (taskData.notionPageId) {
-        task.notes = `${task.notes}\n[Notion ID: ${taskData.notionPageId}]`.trim();
-      }
-
       const response = await this.tasks.tasks.insert({
         tasklist: this.taskListId,
         resource: task
       });
 
+      logger.info('Google task created', { title: taskData.title, completed: taskData.completed });
       return this.formatGoogleTask(response.data);
     } catch (error) {
-      logger.error('Error creating Google Task:', error);
+      logger.error('Error creating Google Task', { message: error.message });
       throw error;
     }
   }
 
   async updateTask(taskId, updates) {
     try {
-      const current = await this.tasks.tasks.get({ 
-        tasklist: this.taskListId, 
-        task: taskId 
+      const current = await this.tasks.tasks.get({
+        tasklist: this.taskListId,
+        task: taskId
       });
 
       const resource = {
@@ -115,19 +143,16 @@ class GoogleTasksService {
           : current.data.due
       };
 
-      console.log(`🔍 DEBUG updateTask - Sending to Google:`, resource);
-
       const resp = await this.tasks.tasks.update({
         tasklist: this.taskListId,
         task: taskId,
         resource
       });
 
-      console.log(`🔍 DEBUG updateTask - Google response:`, resp.data);
-
+      logger.info('Google task updated', { id: taskId, fields: Object.keys(updates) });
       return this.formatGoogleTask(resp.data);
     } catch (error) {
-      logger.error('Error updating Google Task:', error);
+      logger.error('Error updating Google Task', { message: error.message, taskId });
       throw error;
     }
   }
@@ -138,9 +163,10 @@ class GoogleTasksService {
         tasklist: this.taskListId,
         task: taskId
       });
+      logger.info('Google task deleted', { id: taskId });
       return true;
     } catch (error) {
-      logger.error('Error deleting Google Task:', error);
+      logger.error('Error deleting Google Task', { message: error.message, taskId });
       throw error;
     }
   }

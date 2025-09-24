@@ -1,28 +1,42 @@
-const winston = require('winston');
-const config = require('../config');
+const fs = require('fs');
+const path = require('path');
 
-const logger = winston.createLogger({
-  level: config.server.nodeEnv === 'production' ? 'info' : 'debug',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.errors({ stack: true }),
-    winston.format.json()
-  ),
-  defaultMeta: { service: 'notion-google-tasks-sync' },
-  transports: [
-    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'logs/combined.log' })
-  ]
-});
-
-// Add console logging in development
-if (config.server.nodeEnv !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
-  }));
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-module.exports = logger;
+function logFilePath() {
+  const dir = path.join(process.cwd(), 'logs');
+  ensureDir(dir);
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return path.join(dir, `sync-${yyyy}-${mm}-${dd}.log`);
+}
+
+function write(level, msg, meta) {
+  const ts = new Date().toISOString();
+  let line = `[${ts}] [${level}] ${msg}`;
+  if (meta !== undefined) {
+    try {
+      line += ' ' + (typeof meta === 'string' ? meta : JSON.stringify(meta));
+    } catch {
+      // ignore serialization errors
+    }
+  }
+  try {
+    fs.appendFileSync(logFilePath(), line + '\n', 'utf8');
+  } catch (e) {
+    // fallback to console
+    // eslint-disable-next-line no-console
+    console.error('Logger write failed:', e.message);
+  }
+}
+
+module.exports = {
+  info: (msg, meta) => write('INFO', msg, meta),
+  warn: (msg, meta) => write('WARN', msg, meta),
+  error: (msg, meta) => write('ERROR', msg, meta),
+  debug: (msg, meta) => write('DEBUG', msg, meta),
+};
