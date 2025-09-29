@@ -140,14 +140,14 @@ class SyncService {
                 // Only update Google if Notion is newer by threshold
                 if (nt.completed !== representative.completed && this.notionBeatsGoogle(nt, representative)) {
                     if (this.debugCompletion) {
-                        logger.info('Completion change (Notion → Google, latest-wins)', {
-                            title: nt.title,
-                            notionCompleted: nt.completed,
-                            notionEdited: nt.lastModified,
-                            googleUpdated: representative.lastModified,
-                            googleOpenCount: group.open.length,
-                            googleDoneCount: group.done.length
-                        });
+                        // logger.info('Completion change (Notion → Google, latest-wins)', {
+                        //     title: nt.title,
+                        //     notionCompleted: nt.completed,
+                        //     notionEdited: nt.lastModified,
+                        //     googleUpdated: representative.lastModified,
+                        //     googleOpenCount: group.open.length,
+                        //     googleDoneCount: group.done.length
+                        // });
                     }
                     await this.updateGoogleCompletion(representative, nt.completed);
                     updated++;
@@ -171,13 +171,13 @@ class SyncService {
                 // Only push notes when Notion is more recent and content differs
                 if (this.notionBeatsGoogle(nt, candidate) && notionNotes !== googleNotes) {
                     if (this.debugCompletion) {
-                        logger.info('Notes change (Notion → Google, latest-wins)', {
-                            title: nt.title,
-                            notionEdited: nt.lastModified,
-                            googleUpdated: candidate.lastModified,
-                            notionLen: notionNotes.length,
-                            googleLen: googleNotes.length
-                        });
+                        // logger.info('Notes change (Notion → Google, latest-wins)', {
+                        //     title: nt.title,
+                        //     notionEdited: nt.lastModified,
+                        //     googleUpdated: candidate.lastModified,
+                        //     notionLen: notionNotes.length,
+                        //     googleLen: googleNotes.length
+                        // });
                     }
                     await this.updateGoogleNotes(candidate, notionNotes);
                     updated++;
@@ -231,10 +231,10 @@ class SyncService {
                     continue;
                 }
 
-                if (this.debugCompletion) logger.info('Create Google from Notion', {
-                    title: notionTask.title,
-                    completed: notionTask.completed
-                });
+                // if (this.debugCompletion) logger.info('Create Google from Notion', {
+                //     title: notionTask.title,
+                //     completed: notionTask.completed
+                // });
 
                 let notesToSync = notionTask.notes || '';
                 const MAX_CREATE_LENGTH = 8000;
@@ -274,10 +274,10 @@ class SyncService {
                     continue;
                 }
 
-                if (this.debugCompletion) logger.info('Create Notion from Google', {
-                    title: googleTask.title,
-                    completed: googleTask.completed
-                });
+                // if (this.debugCompletion) logger.info('Create Notion from Google', {
+                //     title: googleTask.title,
+                //     completed: googleTask.completed
+                // });
 
                 await notionService.createTask({
                     title: googleTask.title,
@@ -319,12 +319,12 @@ class SyncService {
 
     async updateNotionCompletion(notionTask, completed) {
         await notionService.updateTask(notionTask.id, { completed });
-        if (this.debugCompletion) logger.info('Notion completion updated', { title: notionTask.title, completed });
+        // if (this.debugCompletion) logger.info('Notion completion updated', { title: notionTask.title, completed });
     }
 
     async updateGoogleCompletion(googleTask, completed) {
         await googleTasksService.updateTask(googleTask.id, { completed });
-        if (this.debugCompletion) logger.info('Google completion updated', { title: googleTask.title, completed });
+        // if (this.debugCompletion) logger.info('Google completion updated', { title: googleTask.title, completed });
     }
 
     async updateGoogleNotes(googleTask, notes) {
